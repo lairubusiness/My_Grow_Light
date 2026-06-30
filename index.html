@@ -560,7 +560,7 @@
 <div class="modal-overlay" id="modal-tx">
   <div class="modal">
     <div class="modal-header">
-      <h3>Add Transaction</h3>
+      <h3 id="tx-modal-title">Add Transaction</h3>
       <button class="modal-close" onclick="closeModal('modal-tx')">✕</button>
     </div>
     <div class="type-toggle">
@@ -584,7 +584,7 @@
       </select>
     </div>
     <div class="form-group"><label>Note (optional)</label><input type="text" id="tx-note" placeholder="Add a note…"></div>
-    <button class="btn-primary" onclick="saveTx()">Save Transaction</button>
+    <button class="btn-primary" id="tx-save-btn" onclick="saveTx()">Save Transaction</button>
   </div>
 </div>
 
@@ -660,6 +660,7 @@ let state = {
   depositType: null,
   txTypeFilter: 'all',
   currentTxType: 'income',
+  editingTxId: null,
   dashPeriod: 'today',
   dashCustomDate: null
 };
@@ -885,12 +886,30 @@ function renderDonut(expTx) {
 //  TRANSACTIONS
 // ════════════════════════════════════
 function openTxModal() {
+  state.editingTxId = null;
+  document.getElementById('tx-modal-title').textContent = 'Add Transaction';
+  document.getElementById('tx-save-btn').textContent = 'Save Transaction';
   const t = today(); document.getElementById('tx-date').value = t;
   document.getElementById('tx-title').value = '';
   document.getElementById('tx-amount').value = '';
   document.getElementById('tx-note').value = '';
   document.getElementById('tx-category').value = '';
   setTxType('income');
+  openModal('modal-tx');
+}
+
+function editTx(id) {
+  const tx = state.transactions.find(t=>t.id===id);
+  if (!tx) return;
+  state.editingTxId = id;
+  document.getElementById('tx-modal-title').textContent = 'Edit Transaction';
+  document.getElementById('tx-save-btn').textContent = 'Update Transaction';
+  document.getElementById('tx-title').value = tx.title || '';
+  document.getElementById('tx-amount').value = tx.amount || '';
+  document.getElementById('tx-date').value = tx.date || today();
+  document.getElementById('tx-category').value = tx.category || '';
+  document.getElementById('tx-note').value = tx.note || '';
+  setTxType(tx.type || 'income');
   openModal('modal-tx');
 }
 
@@ -908,9 +927,17 @@ function saveTx() {
   const note = document.getElementById('tx-note').value.trim();
   if (!title || !amount || !date) return showToast('⚠️ Fill in all required fields');
   if (amount <= 0) return showToast('⚠️ Amount must be greater than 0');
-  const tx = { id: Date.now(), userId: uid(), type: state.currentTxType, title, amount, date, category: cat, note };
-  state.transactions.push(tx); save(); closeModal('modal-tx');
-  showToast('✅ Transaction saved!');
+  if (state.editingTxId) {
+    const tx = state.transactions.find(t=>t.id===state.editingTxId);
+    if (tx) { tx.type=state.currentTxType; tx.title=title; tx.amount=amount; tx.date=date; tx.category=cat; tx.note=note; }
+    state.editingTxId = null;
+    save(); closeModal('modal-tx');
+    showToast('✅ Transaction updated!');
+  } else {
+    const tx = { id: Date.now(), userId: uid(), type: state.currentTxType, title, amount, date, category: cat, note };
+    state.transactions.push(tx); save(); closeModal('modal-tx');
+    showToast('✅ Transaction saved!');
+  }
   renderTransactions();
   if (document.getElementById('sec-dashboard').classList.contains('active')) renderDashboard();
 }
@@ -949,7 +976,7 @@ function txRow(t) {
     </div>
     <div>
       <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
-      <div style="text-align:right;margin-top:4px"><button onclick="deleteTx(${t.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">🗑</button></div>
+      <div style="text-align:right;margin-top:4px;display:flex;gap:8px;justify-content:flex-end"><button onclick="editTx(${t.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Edit">✏️</button><button onclick="deleteTx(${t.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Delete">🗑</button></div>
     </div>
   </div>`;
 }
