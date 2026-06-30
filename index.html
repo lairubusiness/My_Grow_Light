@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MyGrowLight – Personal Finance</title>
 <link rel="icon" type="image/png" href="logo.png">
+<link rel="shortcut icon" type="image/png" href="logo.png">
 <link rel="apple-touch-icon" href="logo.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d1117">
+<meta property="og:title" content="MyGrowLight – Personal Finance">
+<meta property="og:image" content="logo.png">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;600;700&display=swap');
 
@@ -343,7 +348,7 @@
 <div id="auth-screen">
   <div class="auth-box">
     <div class="auth-logo">
-      <div class="logo-icon">🌱</div>
+      <img src="logo.png" alt="MyGrowLight logo" class="logo-icon" style="object-fit:contain;background:none;padding:0">
       <h1>MyGrow<span style="color:var(--accent)">Light</span></h1>
       <p>Personal Finance Management</p>
     </div>
@@ -380,7 +385,7 @@
 <div id="app">
   <!-- Topbar -->
   <div class="topbar">
-    <div class="topbar-logo">MyGrow<span>Light</span></div>
+    <div class="topbar-logo" style="display:flex;align-items:center;gap:8px"><img src="logo.png" alt="" style="width:28px;height:28px;border-radius:6px;object-fit:contain">MyGrow<span>Light</span></div>
     <div class="topbar-right">
       <span class="topbar-user" id="topbar-username"></span>
       <div class="avatar" id="user-avatar" onclick="showSection('profile')">?</div>
