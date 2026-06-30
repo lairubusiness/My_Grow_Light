@@ -646,49 +646,57 @@
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // ════════════════════════════════════
-//  STATE
+//  SUPABASE CLIENT
+// ════════════════════════════════════
+const SUPABASE_URL = 'https://vjlgfdrtecbokpylojpg.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_yHY5_IbzXmFhsSKL8J6srQ_us0fXeE5';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ════════════════════════════════════
+//  STATE  (data now lives in Supabase)
 // ════════════════════════════════════
 let state = {
-  users: [],
   currentUser: null,
   transactions: [],
   savings: [],
   members: [],
-  depositTarget: null,
-  depositType: null,
-  txTypeFilter: 'all',
   currentTxType: 'income',
   editingTxId: null,
   dashPeriod: 'today',
   dashCustomDate: null
 };
 
-// ── STORAGE ──
-function save() { localStorage.setItem('mgl_state', JSON.stringify(state)); }
-function load() {
-  const d = localStorage.getItem('mgl_state');
-  if (d) {
-    const parsed = JSON.parse(d);
-    // merge to keep defaults
-    state = { ...state, ...parsed };
-  }
-}
+// kept as a no-op: every change is persisted to Supabase per action
+function save() {}
+
+// ── ROW MAPPERS (DB columns → shapes the UI expects) ──
+const mapTx     = r => ({ id:r.id, userId:r.user_id, type:r.type, title:r.title, amount:Number(r.amount), date:r.date, category:r.category, note:r.note });
+const mapLog    = l => ({ id:l.id, type:l.type, amount:Number(l.amount), date:l.date, note:l.note });
+const mapBox    = r => ({ id:r.id, userId:r.user_id, name:r.name, target:Number(r.target), date:r.start_date, member:r.member_id, desc:r.description, balance:Number(r.balance), log:(r.savings_log||[]).map(mapLog).sort((a,b)=>new Date(a.date)-new Date(b.date)) });
+const mapMember = r => ({ id:r.id, userId:r.user_id, fname:r.fname, lname:r.lname, nic:r.nic, phone:r.phone, dob:r.dob, role:r.role });
+
+// ── LOADERS ──
+async function loadTx()      { const { data } = await sb.from('transactions').select('*').order('date',{ascending:false}); state.transactions = (data||[]).map(mapTx); }
+async function loadSavings() { const { data } = await sb.from('savings_boxes').select('*, savings_log(*)').order('created_at',{ascending:true}); state.savings = (data||[]).map(mapBox); }
+async function loadMembers() { const { data } = await sb.from('members').select('*').order('created_at',{ascending:true}); state.members = (data||[]).map(mapMember); }
+async function loadAll()     { await Promise.all([loadTx(), loadSavings(), loadMembers()]); }
 
 // ── INIT ──
-window.onload = () => {
-  load();
+window.onload = async () => {
   const today = new Date().toISOString().split('T')[0];
   document.getElementById('tx-date').value = today;
   document.getElementById('sav-date').value = today;
   document.getElementById('dep-date').value = today;
   document.getElementById('dash-date').textContent = new Date().toLocaleDateString('en-GB', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  if (state.currentUser) bootApp();
+  const { data:{ session } } = await sb.auth.getSession();
+  if (session) await bootApp();
 };
 
 // ════════════════════════════════════
-//  AUTH
+//  AUTH  (Supabase – works across devices)
 // ════════════════════════════════════
 function showAuthTab(tab) {
   document.querySelectorAll('.auth-tab').forEach((b,i)=>b.classList.toggle('active', (i===0&&tab==='login')||(i===1&&tab==='register')));
@@ -702,7 +710,7 @@ function showError(msg) {
   el.textContent = msg; el.style.display = 'block';
 }
 
-function doRegister() {
+async function doRegister() {
   const fname = document.getElementById('reg-fname').value.trim();
   const lname = document.getElementById('reg-lname').value.trim();
   const email = document.getElementById('reg-email').value.trim().toLowerCase();
@@ -712,38 +720,53 @@ function doRegister() {
   const pass  = document.getElementById('reg-password').value;
   if (!fname||!lname||!email||!pass) return showError('Please fill in all required fields.');
   if (pass.length < 6) return showError('Password must be at least 6 characters.');
-  if (state.users.find(u=>u.email===email)) return showError('This email is already registered.');
-  const user = { id: Date.now(), fname, lname, email, phone, nic, dob, pass, created: new Date().toISOString() };
-  state.users.push(user);
-  state.currentUser = user;
-  save();
-  bootApp();
+  const { data, error } = await sb.auth.signUp({ email, password: pass, options:{ data:{ fname, lname } } });
+  if (error) return showError(error.message);
+  const userId = data.user?.id;
+  if (userId) {
+    await sb.from('profiles').upsert({ id:userId, email, fname, lname, phone:phone||null, nic:nic||null, dob:dob||null });
+  }
+  if (data.session) {
+    await bootApp();
+  } else {
+    showAuthTab('login');
+    showError('✅ Account created! Check your email to confirm, then sign in.');
+  }
 }
 
-function doLogin() {
+async function doLogin() {
   const email = document.getElementById('login-email').value.trim().toLowerCase();
   const pass  = document.getElementById('login-password').value;
-  const user  = state.users.find(u=>u.email===email && u.pass===pass);
-  if (!user) return showError('Invalid email or password.');
-  state.currentUser = user;
-  save();
-  bootApp();
+  if (!email || !pass) return showError('Please enter your email and password.');
+  const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+  if (error) return showError(error.message);
+  await bootApp();
 }
 
-function doLogout() {
-  state.currentUser = null; save();
+async function doLogout() {
+  await sb.auth.signOut();
+  state.currentUser = null;
+  state.transactions = []; state.savings = []; state.members = [];
   document.getElementById('app').style.display = 'none';
   document.getElementById('auth-screen').style.display = 'flex';
   showAuthTab('login');
 }
 
-function bootApp() {
+async function bootApp() {
+  const { data:{ user } } = await sb.auth.getUser();
+  if (!user) return;
+  let { data: profile } = await sb.from('profiles').select('*').eq('id', user.id).single();
+  if (!profile) {
+    profile = { id:user.id, email:user.email, fname:user.user_metadata?.fname||'', lname:user.user_metadata?.lname||'' };
+  }
+  state.currentUser = { ...profile, created: profile.created_at || new Date().toISOString() };
+  await loadAll();
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('app').style.flexDirection = 'column';
   const u = state.currentUser;
-  document.getElementById('topbar-username').textContent = u.fname + ' ' + u.lname;
-  document.getElementById('user-avatar').textContent = (u.fname[0]+(u.lname[0]||'')).toUpperCase();
+  document.getElementById('topbar-username').textContent = (u.fname||'') + ' ' + (u.lname||'');
+  document.getElementById('user-avatar').textContent = ((u.fname||'?')[0] + ((u.lname||'')[0]||'')).toUpperCase();
   showSection('dashboard');
 }
 
@@ -919,7 +942,7 @@ function setTxType(type) {
   document.getElementById('type-expense-btn').classList.toggle('active', type==='expense');
 }
 
-function saveTx() {
+async function saveTx() {
   const title = document.getElementById('tx-title').value.trim();
   const amount = parseFloat(document.getElementById('tx-amount').value);
   const date = document.getElementById('tx-date').value;
@@ -927,17 +950,18 @@ function saveTx() {
   const note = document.getElementById('tx-note').value.trim();
   if (!title || !amount || !date) return showToast('⚠️ Fill in all required fields');
   if (amount <= 0) return showToast('⚠️ Amount must be greater than 0');
+  const row = { type: state.currentTxType, title, amount, date, category: cat||null, note: note||null };
   if (state.editingTxId) {
-    const tx = state.transactions.find(t=>t.id===state.editingTxId);
-    if (tx) { tx.type=state.currentTxType; tx.title=title; tx.amount=amount; tx.date=date; tx.category=cat; tx.note=note; }
+    const { error } = await sb.from('transactions').update(row).eq('id', state.editingTxId);
+    if (error) return showToast('⚠️ ' + error.message);
     state.editingTxId = null;
-    save(); closeModal('modal-tx');
-    showToast('✅ Transaction updated!');
+    closeModal('modal-tx'); showToast('✅ Transaction updated!');
   } else {
-    const tx = { id: Date.now(), userId: uid(), type: state.currentTxType, title, amount, date, category: cat, note };
-    state.transactions.push(tx); save(); closeModal('modal-tx');
-    showToast('✅ Transaction saved!');
+    const { error } = await sb.from('transactions').insert({ ...row, user_id: uid() });
+    if (error) return showToast('⚠️ ' + error.message);
+    closeModal('modal-tx'); showToast('✅ Transaction saved!');
   }
+  await loadTx();
   renderTransactions();
   if (document.getElementById('sec-dashboard').classList.contains('active')) renderDashboard();
 }
@@ -976,15 +1000,18 @@ function txRow(t) {
     </div>
     <div>
       <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
-      <div style="text-align:right;margin-top:4px;display:flex;gap:8px;justify-content:flex-end"><button onclick="editTx(${t.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Edit">✏️</button><button onclick="deleteTx(${t.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Delete">🗑</button></div>
+      <div style="text-align:right;margin-top:4px;display:flex;gap:8px;justify-content:flex-end"><button onclick="editTx('${t.id}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Edit">✏️</button><button onclick="deleteTx('${t.id}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="Delete">🗑</button></div>
     </div>
   </div>`;
 }
 
-function deleteTx(id) {
+async function deleteTx(id) {
   if (!confirm('Delete this transaction?')) return;
-  state.transactions = state.transactions.filter(t=>t.id!==id); save();
+  const { error } = await sb.from('transactions').delete().eq('id', id);
+  if (error) return showToast('⚠️ ' + error.message);
+  await loadTx();
   renderTransactions();
+  if (document.getElementById('sec-dashboard').classList.contains('active')) renderDashboard();
   showToast('🗑 Deleted');
 }
 
@@ -998,16 +1025,18 @@ function openSavingModal() {
   openModal('modal-saving');
 }
 
-function saveSaving() {
+async function saveSaving() {
   const name = document.getElementById('sav-name').value.trim();
   const target = parseFloat(document.getElementById('sav-target').value)||0;
   const date = document.getElementById('sav-date').value;
   const member = document.getElementById('sav-member').value;
   const desc = document.getElementById('sav-desc').value.trim();
   if (!name) return showToast('⚠️ Box name is required');
-  const box = { id: Date.now(), userId: uid(), name, target, date, member, desc, balance: 0, log: [] };
-  state.savings.push(box); save(); closeModal('modal-saving');
+  const { error } = await sb.from('savings_boxes').insert({ user_id: uid(), name, target, start_date: date||null, member_id: member||null, description: desc||null });
+  if (error) return showToast('⚠️ ' + error.message);
+  closeModal('modal-saving');
   showToast('✅ Savings box created!');
+  await loadSavings();
   renderSavings();
 }
 
@@ -1023,7 +1052,7 @@ function openDepositModal(boxId, isDeposit) {
   openModal('modal-deposit');
 }
 
-function confirmDeposit() {
+async function confirmDeposit() {
   const amount = parseFloat(document.getElementById('dep-amount').value);
   const date = document.getElementById('dep-date').value;
   const note = document.getElementById('dep-note').value.trim();
@@ -1031,12 +1060,12 @@ function confirmDeposit() {
   const box = state.savings.find(s=>s.id===depBoxId);
   if (!box) return;
   if (!depIsDeposit && amount > box.balance) return showToast('⚠️ Insufficient balance in box');
-  const change = depIsDeposit ? amount : -amount;
-  box.balance = (box.balance||0) + change;
-  box.log = box.log||[];
-  box.log.push({ id: Date.now(), type: depIsDeposit?'deposit':'withdraw', amount, date, note });
-  save(); closeModal('modal-deposit');
+  // The savings_log trigger updates the box balance automatically.
+  const { error } = await sb.from('savings_log').insert({ box_id: depBoxId, user_id: uid(), type: depIsDeposit?'deposit':'withdraw', amount, date, note: note||null });
+  if (error) return showToast('⚠️ ' + error.message);
+  closeModal('modal-deposit');
   showToast(depIsDeposit ? '✅ Money deposited!' : '✅ Money withdrawn!');
+  await loadSavings();
   renderSavings();
 }
 
@@ -1069,10 +1098,10 @@ function renderSavings() {
       </div>
       ${b.target>0?`<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div><div style="font-size:11px;color:var(--muted)">${pct.toFixed(1)}% of target reached</div>`:''}
       <div class="saving-actions">
-        <button class="btn-sm deposit" onclick="openDepositModal(${b.id},true)">+ Deposit</button>
-        <button class="btn-sm withdraw" onclick="openDepositModal(${b.id},false)">− Withdraw</button>
-        <button class="btn-sm history-btn" onclick="toggleLog(${b.id})">📋 History</button>
-        <button class="btn-sm" style="border-color:var(--expense);color:var(--expense);background:transparent;margin-left:auto" onclick="deleteBox(${b.id})">🗑</button>
+        <button class="btn-sm deposit" onclick="openDepositModal('${b.id}',true)">+ Deposit</button>
+        <button class="btn-sm withdraw" onclick="openDepositModal('${b.id}',false)">− Withdraw</button>
+        <button class="btn-sm history-btn" onclick="toggleLog('${b.id}')">📋 History</button>
+        <button class="btn-sm" style="border-color:var(--expense);color:var(--expense);background:transparent;margin-left:auto" onclick="deleteBox('${b.id}')">🗑</button>
       </div>
       <div class="saving-log" id="log-${b.id}">
         ${log.length ? log.map(l=>`
@@ -1088,9 +1117,11 @@ function renderSavings() {
   }).join('');
 }
 
-function deleteBox(id) {
+async function deleteBox(id) {
   if (!confirm('Delete this savings box?')) return;
-  state.savings = state.savings.filter(s=>s.id!==id); save();
+  const { error } = await sb.from('savings_boxes').delete().eq('id', id);
+  if (error) return showToast('⚠️ ' + error.message);
+  await loadSavings();
   renderSavings(); showToast('🗑 Box deleted');
 }
 
@@ -1103,7 +1134,7 @@ function openMemberModal() {
   openModal('modal-member');
 }
 
-function saveMember() {
+async function saveMember() {
   const fname = document.getElementById('mem-fname').value.trim();
   const lname = document.getElementById('mem-lname').value.trim();
   const nic = document.getElementById('mem-nic').value.trim();
@@ -1111,9 +1142,11 @@ function saveMember() {
   const dob = document.getElementById('mem-dob').value;
   const role = document.getElementById('mem-role').value.trim();
   if (!fname) return showToast('⚠️ First name is required');
-  const m = { id: Date.now(), userId: uid(), fname, lname, nic, phone, dob, role };
-  state.members.push(m); save(); closeModal('modal-member');
+  const { error } = await sb.from('members').insert({ user_id: uid(), fname, lname: lname||null, nic: nic||null, phone: phone||null, dob: dob||null, role: role||null });
+  if (error) return showToast('⚠️ ' + error.message);
+  closeModal('modal-member');
   showToast('✅ Member added!');
+  await loadMembers();
   renderMembers();
 }
 
@@ -1133,13 +1166,15 @@ function renderMembers() {
       ${m.dob?`<div class="member-detail">🎂 ${fmtDate(m.dob)}</div>`:''}
       ${m.role?`<div class="member-detail">👔 ${esc(m.role)}</div>`:''}
     </div>
-    <button onclick="deleteMember(${m.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;align-self:flex-start">🗑</button>
+    <button onclick="deleteMember('${m.id}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;align-self:flex-start">🗑</button>
   </div>`).join('');
 }
 
-function deleteMember(id) {
+async function deleteMember(id) {
   if (!confirm('Remove this member?')) return;
-  state.members = state.members.filter(m=>m.id!==id); save();
+  const { error } = await sb.from('members').delete().eq('id', id);
+  if (error) return showToast('⚠️ ' + error.message);
+  await loadMembers();
   renderMembers(); showToast('🗑 Member removed');
 }
 
